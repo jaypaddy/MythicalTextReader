@@ -1,0 +1,260 @@
+﻿<!DOCTYPE html>
+
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta charset="utf-8" />
+    <title></title>
+</head>
+<body>
+
+    <div class="row">
+        Select File(s)<input class="form-control" type="file" id="files" name="files[]" multiple/>
+    </div>
+    <p></p>
+    <table id="outputTable" border="1">
+        <tr>
+            <td>Image</td>
+            <!--<td>File Name</td>-->
+            <td>Status</td>
+            <td>Recognized Text</td>
+            <td>Recognized JSON</td>
+        </tr>
+    </table>
+
+    <style>
+        .thumb {
+
+            border: 1px solid #000;
+            margin: 10px 5px 0 0;
+        }
+
+        .prettyprint{display:block;color:#393318}
+
+        a:hover{color:#33658a;background-color:#cee0ed;border-color:rgba(0,0,0,0)}
+    </style>
+
+
+    <script>
+    var imgThumb, fileName, predictionResult;
+    var fip;
+    var files;
+    var binReader;
+    var opLocations = [];
+    var opLocationsStatus = {};
+    var sURI = 'https://southcentralus.api.cognitive.microsoft.com/vision/v2.0/recognizeText?mode=Printed';
+    var key = 'REPLACE WITH YOUR SUBSCRIPTION KEY for COGNITIVE SERVICES';
+    var bGlobalLoopFlag=false;
+    var opLocationID='';
+    
+
+
+    document.getElementById('files').addEventListener('change', handleFileSelect, false);
+    
+    function handleFileSelect(evt) {
+        files = evt.target.files; // FileList object
+        
+        // Loop through the FileList and render image files as thumbnails.
+        for (var i = 0,f ; f = files[i]; i++) {
+            // Only process image files.
+            if (!f.type.match('image.*')) {
+                continue;
+            }
+            var imgReader = new FileReader(); //This is for Thumbnail
+            // Closure to capture the file information.
+            imgReader.onload = (function (theFile) {
+                return function (e) {                  
+                    // Render thumbnail.
+
+                    imgThumb = ['<img class="thumb"', 'id="IMG', theFile.name ,'" src="', e.target.result,
+                        '" title="', escape(theFile.name), '"/>'].join('');
+                    status = ['<output id="OPLOCSTATUS-', theFile.name, '">', 'To be Processed', '</output>'].join('');
+                    result = ['<output id="OPLOCRESULT-', theFile.name, '">', 'To be Processed', '</output>'].join('');
+                    addRow(imgThumb, theFile.name, status,result);
+                    console.log('imgLoader:' + theFile.name);
+
+                };
+            })(f);
+
+           // Read in the image file as a data URL.
+           imgReader.readAsDataURL(f); //This is for Thumbnail
+        }
+        scanForText();
+       // flushOpLocationRequest();
+    }
+  
+    function addRow(fileURL,fileName,status,result ) {
+        var tbl = document.getElementById("outputTable");
+        var rowLen = tbl.rows.length;
+        var row = tbl.insertRow(rowLen);
+        var col1 = row.insertCell(0);
+        col1.innerHTML = fileURL;
+        /**var col2 = row.insertCell(1);
+        col2.innerHTML = fileName;**/
+        var col3 = row.insertCell(1);
+        col3.innerHTML = status;
+        var col4 = row.insertCell(2);
+        col4.innerHTML = result;
+        var col5 = row.insertCell(3);
+        col5.innerHTML = ['<output id="JSONRESULT-', theFile.name, '">', 'JSON', '</output>'].join('');;        
+    }
+    
+    function scanForText() {
+            var tblBuild=0;
+
+            for (var i = 0, f; f = files[i]; i++) {
+                console.log("file:",i,f)
+                //Read the Image File 
+                binReader = new FileReader(); 
+                binReader.onload = (function (theFile) {
+                    return function (e) {
+                        //Grab a Thumbnail
+                        var oReq = new XMLHttpRequest();
+                        oReq.addEventListener("error", reqFailed);
+                        oReq.open('POST', sURI, true);
+                        oReq.setRequestHeader('Content-Type', 'application/octet-stream');
+                        oReq.setRequestHeader('Ocp-Apim-Subscription-Key', key); 
+                        oReq.onreadystatechange = function () {
+                            if (oReq.readyState == 4 && oReq.status == 202) {                                  
+                                //Capture the results and wait on Results Operations
+                                opLocationURI = oReq.getResponseHeader('Operation-Location');
+                                opLocations.push(opLocationURI);
+                                console.log(opLocationURI); 
+                                flushOpLocationRequest(theFile.name,opLocationURI);
+                             }
+                             else if (oReq.status == 415)
+                             {
+                                document.getElementById('OPLOCSTATUS-' + theFile.name).innerText = oReq.responseText;
+                                
+                             }
+                        }
+                        //Add the image to the Body
+                        oReq.send(e.target.result); 
+                    };
+                })(f);
+                binReader.readAsArrayBuffer(f);
+        }
+    }
+
+    function getDateTime(){
+        var d = new Date();
+
+        var h = d.getHours();
+        var m = d.getMinutes();
+        var s = d.getSeconds();
+        var ms = d.getMilliseconds();
+
+        h = (h < 10) ? "0" + h : h;
+        m = (m < 10) ? "0" + m : m;
+        s = (s < 10) ? "0" + s : s;  
+        ms = (ms < 10) ? "0" + ms : ms;
+
+        return    h + ":" + m + ":" + s + ":" +ms ;
+    }
+    
+    function resolveAfter2Seconds(fName,opLocURI) { 
+        return new Promise(resolve => {
+            setTimeout(() => {
+                flushOpLocationRequest(fName,opLocURI);
+            }, 2000);
+        });
+    }
+    
+    async function f1(fName,opLocURI) {
+        console.log(getDateTime() + '::' + fName + '::::::START WAIT...' );
+    var x = await resolveAfter2Seconds(fName,opLocURI);
+         console.log(getDateTime() + '::' + fName + '::::::DONE WAIT...');
+
+    }
+
+   async function flushOpLocationRequest(fName,opLocURI) { 
+        console.log(getDateTime() + '::Iterating : ',fName, );
+            var oReq2 = new  XMLHttpRequest();
+            oReq2.open('GET', opLocURI, true);
+            oReq2.setRequestHeader('Ocp-Apim-Subscription-Key', key); 
+            oReq2.onreadystatechange = function () {
+                    if (oReq2.readyState == 4 && oReq2.status == 200) {   
+                        recognizeTxtJSON = JSON.parse(oReq2.response);     
+                        document.getElementById('OPLOCSTATUS-' + fName).innerText = recognizeTxtJSON.status;
+                        //document.getElementById('OPLOCRESULT-' + fName).innerText = JSON.stringify(recognizeTxtJSON.recognitionResult);
+                        console.log(getDateTime() + '::' + fName + recognizeTxtJSON.status);    
+                        switch(recognizeTxtJSON.status ){
+                                case 'Succeeded':
+                                    drawText('OPLOCRESULT-' + fName,recognizeTxtJSON.recognitionResult);
+                                   // document.getElementById('JSONRESULT-' + fName).innerText = recognizeTxtJSON.responseText;
+                                case 'Failed':
+                                            break;
+                                default : //Running or Not Started
+                                   
+                                    f1(fName,opLocURI);
+                                    
+                        }                    
+                    }
+                }
+        oReq2.send();    
+    }
+
+
+    function reqFailed(txt) {
+        console.log("An error occurred while transferring the file.");
+        alert(txt);
+    }
+
+    function reqFailed2(txt) {
+        console.log("An error occurred while transferring the file.");
+        alert(txt);
+    }
+
+
+    /*
+        Lines 
+        An array of objects, where each object represents a line of recognized text. 
+        Words 
+        An array of objects, where each object represents a recognized word. 
+        BoundingBox 
+        Bounding box of a recognized region, line, or word, depending on the parent object. The eight integers represent 
+        the four points (x-coordinate, y-coordinate) of the detected rectangle from the left-top corner and clockwise. 
+        Text 
+        String value of a recognized word/line. 
+    */
+    async function drawText(ID,objJSON) {
+
+    /*
+    {"lines":[
+                {   "boundingBox":[148,122,900,46,913,169,161,245],
+                    "text":"GASBOY",
+                    "words":[{"boundingBox":[191,127,907,47,926,171,182,233],"text":"GASBOY"}]
+                },
+                    {"boundingBox":[342,240,776,191,781,233,347,282],
+                    "text":"PATENTS PENDING",
+                    "words":[
+                                {"boundingBox":[342,242,559,217,561,260,345,283],"text":"PATENTS"},
+                                {"boundingBox":[569,216,773,194,776,236,572,259],"text":"PENDING"}
+                            ]
+                }
+            ]
+    }
+    */  var outputText = '<DIV>'; 
+       
+        for(var l=0; l< objJSON.lines.length; l++) {
+            line = '<A class=":hover">' + JSON.stringify(objJSON.lines[l].text) + '</A><BR>\r\n';
+            outputText += line;
+        }
+
+         //document.getElementById(ID).innerText = outputText;
+        outputText += '</DIV>';
+         document.getElementById(ID).innerHTML = outputText;
+        // console.log(outputText);
+
+    }
+
+
+
+
+
+    </script>
+
+
+
+</body>
+</html>
+
